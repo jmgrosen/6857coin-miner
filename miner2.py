@@ -340,7 +340,7 @@ __device__ __forceinline__ static void cn_aes_gpu_init(uint32_t *sharedMemory)
 		sharedMemory[i] = d_t_fn[i];
 }
 
-__global__ void go(uint32_t base, const uint32_t * __restrict__ akey, const uint32_t * __restrict bkey, const uint64_t ai0, const uint64_t ai1, const uint64_t bi0, const uint64_t bi1, uint32_t *success, uint32_t difficulty, uint8_t *dists) {
+__global__ void go(uint32_t base, const uint32_t * __restrict__ akey, const uint32_t * __restrict bkey, const uint64_t ai0, const uint64_t ai1, const uint64_t bi0, const uint64_t bi1, uint32_t *success, uint32_t difficulty /* , uint8_t *dists */) {
   __shared__ uint32_t sharedMemory[1024];
 
   cn_aes_gpu_init(sharedMemory);
@@ -376,10 +376,10 @@ __global__ void go(uint32_t base, const uint32_t * __restrict__ akey, const uint
 
   uint8_t dist = __popcll(aj[0]) + __popcll(aj[1]);
 
-  dists[thread] = dist;
+  /* dists[thread] = dist; */
 
   if (dist <= 128 - difficulty) {
-    *success = thread;
+    *success = base + thread;
   }
 }
 """)
@@ -412,6 +412,7 @@ def solve_block(b):
     timestamp, and root (a hash of the block data).
 
     """
+    b['difficulty'] = 98
     d = b["difficulty"]
     n = 0
     b["nonces"] = [rand_nonce() for i in range(3)]
@@ -430,17 +431,20 @@ def solve_block(b):
     min_dist = 128
     last_time = time.time()
     while success[0] == 2**32 - 1:
-        go(numpy.uint32(base), drv.In(akey_expanded), drv.In(bkey_expanded), numpy.uint64(ai0), numpy.uint64(ai1), numpy.uint64(bi0), numpy.uint64(bi1), drv.InOut(success), numpy.uint32(d), drv.Out(dists), block=(block_size, 1, 1), grid=(grid_size, 1))
-        min_dist = min(min_dist, numpy.min(dists))
+        # go(numpy.uint32(base), drv.In(akey_expanded), drv.In(bkey_expanded), numpy.uint64(ai0), numpy.uint64(ai1), numpy.uint64(bi0), numpy.uint64(bi1), drv.InOut(success), numpy.uint32(d), drv.Out(dists), block=(block_size, 1, 1), grid=(grid_size, 1))
+        go(numpy.uint32(base), drv.In(akey_expanded), drv.In(bkey_expanded), numpy.uint64(ai0), numpy.uint64(ai1), numpy.uint64(bi0), numpy.uint64(bi1), drv.InOut(success), numpy.uint32(d), block=(block_size, 1, 1), grid=(grid_size, 1))
+        # min_dist = min(min_dist, numpy.min(dists))
         base += SIZE
         if base % checkup == 0:
             now = time.time()
             print "throughput = ", checkup / (now - last_time)
-            print "min_dist = ", min_dist
+            # print "min_dist = ", min_dist
             last_time = now
     print "got it!"
-    b["nonces"][2] = success[0]
+    b["nonces"][2] = int(success[0])
 
+    if not validate_pow(b):
+        print "fuck"
 
 def main():
     """
@@ -605,6 +609,10 @@ def rand_nonce():
     Returns a random uint64
     """
     return random.getrandbits(64)
+
+def validate_pow(b):
+    Ai, Aj, Bi, Bj = [unpack_uint128(x) for x in compute_ciphers(b)]
+    return dist((Ai + Bj) & MASK, (Aj + Bi) & MASK) <= 128 - b['difficulty']
 
 
 if __name__ == "__main__":
