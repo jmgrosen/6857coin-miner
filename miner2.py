@@ -340,7 +340,7 @@ __device__ __forceinline__ static void cn_aes_gpu_init(uint32_t *sharedMemory)
 		sharedMemory[i] = d_t_fn[i];
 }
 
-__global__ void go(const uint32_t * __restrict__ akey, const uint32_t * __restrict bkey, const uint64_t ai0, const uint64_t ai1, const uint64_t bi0, const uint64_t bi1, uint32_t *success, uint32_t difficulty) {
+__global__ void go(uint32_t base, const uint32_t * __restrict__ akey, const uint32_t * __restrict bkey, const uint64_t ai0, const uint64_t ai1, const uint64_t bi0, const uint64_t bi1, uint32_t *success, uint32_t difficulty, uint8_t *dists) {
   __shared__ uint32_t sharedMemory[1024];
 
   cn_aes_gpu_init(sharedMemory);
@@ -351,10 +351,10 @@ __global__ void go(const uint32_t * __restrict__ akey, const uint32_t * __restri
   uint64_t aj[2], bj[2];
 
   aj[0] = 0;
-  aj[1] = thread;
+  aj[1] = base + thread;
 
   bj[0] = 0;
-  bj[1] = thread;
+  bj[1] = base + thread;
 
   cn_aes_pseudo_round_mut(sharedMemory, (uint32_t *) aj, akey);
   cn_aes_pseudo_round_mut(sharedMemory, (uint32_t *) bj, bkey);
@@ -374,13 +374,19 @@ __global__ void go(const uint32_t * __restrict__ akey, const uint32_t * __restri
   aj[0] ^= bj[0];
   aj[1] ^= bj[1];
 
-  if (__popcll(aj[0]) + __popcll(aj[1]) <= 128 - difficulty) {
+  uint8_t dist = __popcll(aj[0]) + __popcll(aj[1]);
+
+  dists[thread] = dist;
+
+  if (dist <= 128 - difficulty) {
     *success = thread;
   }
 }
 """)
 
 go = cuda_mod.get_function('go')
+# init = cuda_mod.get_function('cn_aes_gpu_init')
+# encrypt = cuda_mod.get_function('cn_aes_pseudo_round_mut')
 
 
 def count_ones(x):
@@ -408,34 +414,29 @@ def solve_block(b):
     """
     d = b["difficulty"]
     n = 0
-    last_time = time.time()
     b["nonces"] = [rand_nonce() for i in range(3)]
     seed, seed2 = compute_seeds(b)
-    print len(seed)
-    seed = numpy.array(flatten(pyaes.aes.AES(seed)._Ke), dtype=numpy.uint32)
-    seed2 = numpy.array(flatten(pyaes.aes.AES(seed2)._Ke), dtype=numpy.uint32)
+    akey_expanded = numpy.array(flatten(pyaes.aes.AES(seed)._Ke), dtype=numpy.uint32)
+    bkey_expanded = numpy.array(flatten(pyaes.aes.AES(seed2)._Ke), dtype=numpy.uint32)
     ciphers = compute_ciphers(b)
     (ai0, ai1), _, (bi0, bi1), _ = [struct.unpack('>QQ', cipher) for cipher in ciphers]
     success = numpy.array([2**32 - 1], dtype=numpy.uint32)
-    go(seed, seed2, numpy.uint64(ai0), numpy.uint64(ai1), numpy.uint64(bi0), numpy.uint64(bi1), drv.Out(success), numpy.uint32(d), block=(1, 1, 1))
-    print success
-    # while True:
-    #     b["nonces"] = [rand_nonce() for i in range(3)]
-    #     #   Compute Ai, Aj, Bi, Bj
-    #     ciphers = compute_ciphers(b)
-    #     #   Parse the ciphers as big-endian unsigned integers
-    #     Ai, Aj, Bi, Bj = [unpack_uint128(cipher) for cipher in ciphers]
-    #     #   TODO: Verify PoW
-    #     if dist((Ai + Bj) & MASK, (Aj + Bi) & MASK) <= 128 - d:
-    #         print "good to go"
-    #         return
-
-    #     n += 1
-    #     if n == 10000:
-    #         now = time.time()
-    #         print "throughput =", n / (now - last_time)
-    #         last_time = now
-    #         n = 0
+    base = 0
+    SIZE = 1024
+    dists = numpy.zeros((SIZE,), dtype=numpy.uint8)
+    min_dist = 128
+    last_time = time.time()
+    while success[0] == 2**32 - 1:
+        go(numpy.uint32(base), drv.In(akey_expanded), drv.In(bkey_expanded), numpy.uint64(ai0), numpy.uint64(ai1), numpy.uint64(bi0), numpy.uint64(bi1), drv.InOut(success), numpy.uint32(d), drv.Out(dists), block=(1024, 1, 1))
+        min_dist = min(min_dist, min(dists))
+        base += SIZE
+        if base % (2**20) == 0:
+            now = time.time()
+            print "throughput = ", 2**20 / (now - last_time)
+            print "min_dist = ", min_dist
+            last_time = now
+    print "got it!"
+    b["nonces"][2] = success[0]
 
 
 def main():
