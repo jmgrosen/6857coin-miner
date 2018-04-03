@@ -422,17 +422,20 @@ def solve_block(b):
     (ai0, ai1), _, (bi0, bi1), _ = [struct.unpack('>QQ', cipher) for cipher in ciphers]
     success = numpy.array([2**32 - 1], dtype=numpy.uint32)
     base = 0
-    SIZE = 1024
+    grid_size = 2**14
+    block_size = 1024
+    SIZE = grid_size * block_size
+    checkup= 2**24
     dists = numpy.zeros((SIZE,), dtype=numpy.uint8)
     min_dist = 128
     last_time = time.time()
     while success[0] == 2**32 - 1:
-        go(numpy.uint32(base), drv.In(akey_expanded), drv.In(bkey_expanded), numpy.uint64(ai0), numpy.uint64(ai1), numpy.uint64(bi0), numpy.uint64(bi1), drv.InOut(success), numpy.uint32(d), drv.Out(dists), block=(1024, 1, 1))
-        min_dist = min(min_dist, min(dists))
+        go(numpy.uint32(base), drv.In(akey_expanded), drv.In(bkey_expanded), numpy.uint64(ai0), numpy.uint64(ai1), numpy.uint64(bi0), numpy.uint64(bi1), drv.InOut(success), numpy.uint32(d), drv.Out(dists), block=(block_size, 1, 1), grid=(grid_size, 1))
+        min_dist = min(min_dist, numpy.min(dists))
         base += SIZE
-        if base % (2**20) == 0:
+        if base % checkup == 0:
             now = time.time()
-            print "throughput = ", 2**20 / (now - last_time)
+            print "throughput = ", checkup / (now - last_time)
             print "min_dist = ", min_dist
             last_time = now
     print "got it!"
