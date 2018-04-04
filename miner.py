@@ -7,6 +7,11 @@ import random
 import time
 from struct import pack, unpack
 import requests
+import topBlock
+from functools import wraps
+import errno
+import os
+import signal
 
 NODE_URL = "http://6857coin.csail.mit.edu"
 
@@ -31,6 +36,7 @@ def dist(x, y):
     return count_ones(x ^ y)
 
 MASK = 2**128 - 1
+MASK64 = 2**64 - 1
 
 class TimeoutError(Exception):
     pass
@@ -47,26 +53,33 @@ def solve_block(b):
     d = b["difficulty"]
     n = 0
     last_time = time.time()
+    started_time = time.time()
     b["nonces"] = [rand_nonce() for i in range(3)]
     create_ciphers(b)
+    ciphers_j = compute_ciphers_j(b)
+    Aj, Bj = [unpack_uint128(cipher) for cipher in ciphers_j]
     while True:
-        b["nonces"][1:] = [rand_nonce() for i in range(2)]
+       # b["nonces"][1:] = [rand_nonce() for i in range(2)]
+        b["nonces"][1] = (b["nonces"][1]+1) & MASK64
         #   Compute Ai, Aj, Bi, Bj
-        ciphers = compute_ciphers(b)
+        #ciphers = compute_ciphers(b)
+        ciphers_i = compute_ciphers_i(b)
         #   Parse the ciphers as big-endian unsigned integers
-        Ai, Aj, Bi, Bj = [unpack_uint128(cipher) for cipher in ciphers]
+        #Ai, Aj, Bi, Bj = [unpack_uint128(cipher) for cipher in ciphers]
+        Ai, Bi = [unpack_uint128(cipher) for cipher in ciphers_i]
         #   TODO: Verify PoW
         if dist((Ai + Bj) & MASK, (Aj + Bi) & MASK) <= 128 - d:
             print "good to go"
             return
 
         n += 1
-        if n == 10000:
+        if n == 1E6:
             now = time.time()
             print "throughput =", n / (now - last_time)
             last_time = now
             n = 0
-
+            if (now-started_time)>=120.0:
+                raise TimeoutError()
 
 def main():
     """
@@ -80,6 +93,7 @@ def main():
     while True:
         #   Next block's parent, version, difficulty
         next_header = get_next()
+        #next_header = get_genesis()
         #   Construct a block with our name in the contents that appends to the
         #   head of the main chain
         new_block = make_block(next_header, block_contents)
@@ -102,7 +116,17 @@ def get_next():
            version         single byte
     """
     return json.loads(urllib2.urlopen(NODE_URL + "/next").read())
+def get_genesis():
+    return json.loads(urllib2.urlopen(NODE_URL + "/block/9232329cb757c006f0fe05b72fdee6d805c2ac27eed3f93d95ed41c25eac6b21").read())['header']
 
+def get_from_parent():
+    top_block_id = topBlock.find_top_block("jmgro")
+    parent_block_full = json.loads(urllib2.urlopen(NODE_URL + "/block/"+top_block_id).read())
+    block_id = parent_block_full['id']
+    parent_block = parent_block_full['header']
+    parent_block['parentid'] = block_id
+    parent_block['root'] = "0000000000000000000000000000000000000000000000000000000000000000"
+    return parent_block
 
 def add_block(h, contents):
     """
@@ -116,6 +140,8 @@ def add_block(h, contents):
                 version         single byte
             block:          string
     """
+    del h['A']
+    del h['B']
     add_block_request = {"header": h, "block": contents}
     print "Sending block to server..."
     print json.dumps(add_block_request)
@@ -180,6 +206,40 @@ def create_ciphers(b):
 
     b['A'] = A
     b['B'] = B
+
+def compute_ciphers_i(b):
+    """
+    Computes the ciphers Ai, Aj, Bi, Bj of a block header.
+    """
+
+    A = b['A']
+    B = b['B']
+
+    i = pack('>QQ', 0, long(b["nonces"][1]))
+
+    Ai = A.encrypt(i)
+    Bi = B.encrypt(i)
+
+    return Ai, Bi
+
+
+def compute_ciphers_j(b):
+    """
+    Computes the ciphers Ai, Aj, Bi, Bj of a block header.
+    """
+
+    A = b['A']
+    B = b['B']
+
+    j = pack('>QQ', 0, long(b["nonces"][2]))
+
+    Aj = A.encrypt(j)
+    Bj = B.encrypt(j)
+
+    return Aj, Bj
+
+
+
 
 def compute_ciphers(b):
     """
