@@ -56,13 +56,17 @@ def solve_block(b):
     started_time = time.time()
     b["nonces"] = [rand_nonce() for i in range(3)]
     create_ciphers(b)
+    ciphers_j = compute_ciphers_j(b)
+    Aj, Bj = [unpack_uint128(cipher) for cipher in ciphers_j]
     while True:
        # b["nonces"][1:] = [rand_nonce() for i in range(2)]
         b["nonces"][1] = (b["nonces"][1]+1) & MASK64
         #   Compute Ai, Aj, Bi, Bj
-        ciphers = compute_ciphers(b)
+        #ciphers = compute_ciphers(b)
+        ciphers_i = compute_ciphers_i(b)
         #   Parse the ciphers as big-endian unsigned integers
-        Ai, Aj, Bi, Bj = [unpack_uint128(cipher) for cipher in ciphers]
+        #Ai, Aj, Bi, Bj = [unpack_uint128(cipher) for cipher in ciphers]
+        Ai, Bi = [unpack_uint128(cipher) for cipher in ciphers_i]
         #   TODO: Verify PoW
         if dist((Ai + Bj) & MASK, (Aj + Bi) & MASK) <= 128 - d:
             print "good to go"
@@ -202,6 +206,40 @@ def create_ciphers(b):
 
     b['A'] = A
     b['B'] = B
+
+def compute_ciphers_i(b):
+    """
+    Computes the ciphers Ai, Aj, Bi, Bj of a block header.
+    """
+
+    A = b['A']
+    B = b['B']
+
+    i = pack('>QQ', 0, long(b["nonces"][1]))
+
+    Ai = A.encrypt(i)
+    Bi = B.encrypt(i)
+
+    return Ai, Bi
+
+
+def compute_ciphers_j(b):
+    """
+    Computes the ciphers Ai, Aj, Bi, Bj of a block header.
+    """
+
+    A = b['A']
+    B = b['B']
+
+    j = pack('>QQ', 0, long(b["nonces"][2]))
+
+    Aj = A.encrypt(j)
+    Bj = B.encrypt(j)
+
+    return Aj, Bj
+
+
+
 
 def compute_ciphers(b):
     """
