@@ -15,8 +15,10 @@ import numpy as np
 # from pycuda.compiler import SourceModule
 # import pyaes.aes
 from cffi import FFI
+import signal
 
 NODE_URL = "http://6857coin.csail.mit.edu"
+REFRESH_TIME = 60
 
 """
     This is a bare-bones miner compatible with 6857coin, minus the final proof of
@@ -104,6 +106,9 @@ def swap_endianness_64(x):
 def str_to_np(s):
     return np.array([ord(c) for c in s], dtype=np.uint8)
 
+def _handle_timeout(signum, frame):
+    raise TimeoutError()
+
 def solve_block(b):
     """
     Iterate over random nonce triples until a valid proof of work is found
@@ -174,6 +179,8 @@ def main():
         print "Solving block..."
         print new_block
         try:
+            signal.signal(signal.SIGALRM, _handle_timeout)
+            signal.alarm(REFRESH_TIME)
             solve_block(new_block)
             #   Send to the server
             add_block(new_block, block_contents)
